@@ -16,7 +16,7 @@ def split_audio(audio_path, chunk_dir, chunk_duration = 300)
   puts "Splitting audio into #{chunk_duration / 60} minute chunks..."
   command = "ffmpeg -i #{Shellwords.escape(audio_path)} -f segment -segment_time #{chunk_duration} -c copy #{Shellwords.escape(File.join(chunk_dir, 'chunk_%03d.ogg'))} -y"
   system(command) || raise("Failed to split audio")
-  Dir.glob(File.join(chunk_dir, 'chunk_*.ogg'))
+  Dir.glob(File.join(chunk_dir, 'chunk_*.ogg')).sort
 end
 
 def transcribe_audio_chunk(audio_path, language)
@@ -30,17 +30,17 @@ def transcribe_audio_chunk(audio_path, language)
     body: {
       'file' => audio_file,
       'model' => 'whisper-1',
-      'language' => language
+      'language' => language,
+      'response_format' => 'verbose_json',
+      'timestamp_granularities' => ['word']
     }
   )
 
   audio_file.close
   if response.code == 200
     response_body = JSON.parse(response.body)
-    transcript = response_body['text'].strip
-    raise "No transcript generated" if transcript.empty?
-
-    transcript
+    raise "No transcript generated" if response_body['text'].empty?
+    response_body
   else
     raise "Failed to transcribe audio chunk: #{response.body}"
   end
@@ -49,38 +49,71 @@ end
 def transcribe_audio(audio_path, language)
   Dir.mktmpdir do |chunk_dir|
     chunks = split_audio(audio_path, chunk_dir)
-    transcript = ''
-    chunks.each do |chunk|
+    base_offset = 0
+    segments = []
+
+    chunks.each_with_index do |chunk, i|
       puts "Transcribing chunk: #{chunk}"
-      transcript += transcribe_audio_chunk(chunk, language) + "\n"
+      result = transcribe_audio_chunk(chunk, language)
+
+      # Adjust timestamps for this chunk
+      chunk_segments = result['words'].map do |word|
+        {
+          text: word['word'],
+          start: word['start'] + base_offset,
+          end: word['end'] + base_offset
+        }
+      end
+
+      segments.concat(chunk_segments)
+      base_offset += 300 # Add chunk duration to offset
     end
-    transcript.strip
+
+    segments
   end
 end
 
-def create_subtitles(transcript, output_srt_path)
+def create_subtitles(segments, output_srt_path)
   puts "Creating SRT subtitles..."
+
+  # Group words into subtitle lines (roughly 10 words per line)
+  lines = []
+  current_line = []
+  current_start = nil
+
+  segments.each do |segment|
+    if current_line.empty?
+      current_start = segment[:start]
+    end
+
+    current_line << segment[:text]
+
+    if current_line.length >= 10 || segment == segments.last
+      lines << {
+        text: current_line.join(' '),
+        start: current_start,
+        end: segment[:end]
+      }
+      current_line = []
+    end
+  end
+
   File.open(output_srt_path, 'w') do |file|
-    start_time = 0
-    i = 1
-    transcript.each_line do |line|
-      end_time = start_time + 2 # Assuming 2 seconds per line
-      file.puts("#{i}")
-      file.puts(format_timestamp(start_time) + " --> " + format_timestamp(end_time))
-      file.puts(line.strip)
+    lines.each_with_index do |line, i|
+      file.puts(i + 1)
+      file.puts("#{format_timestamp(line[:start])} --> #{format_timestamp(line[:end])}")
+      file.puts(line[:text].strip)
       file.puts
-      start_time += 2
-      i += 1
     end
   end
 end
 
 def format_timestamp(seconds)
-  millis = (seconds * 1000).to_i
-  hrs = millis / (3600 * 1000)
-  mins = (millis / (60 * 1000)) % 60
-  secs = (millis / 1000) % 60
-  ms = millis % 1000
+  total_millis = (seconds * 1000).to_i
+  hrs = total_millis / (3600 * 1000)
+  mins = (total_millis / (60 * 1000)) % 60
+  secs = (total_millis / 1000) % 60
+  ms = total_millis % 1000
   format("%02d:%02d:%02d,%03d", hrs, mins, secs, ms)
 end
 
@@ -107,13 +140,13 @@ if __FILE__ == $PROGRAM_NAME
     output_video_path = File.join(File.dirname(video_path), "output_with_subtitles.mp4")
 
     extract_audio(video_path, audio_path)
-    transcript = transcribe_audio(audio_path, language)
+    segments = transcribe_audio(audio_path, language)
 
     # Save the transcript to a text file
-    File.write(transcript_txt_path, transcript)
+    File.write(transcript_txt_path, segments.map { |s| s[:text] }.join(' '))
     puts "Transcript saved as: #{transcript_txt_path}"
 
-    create_subtitles(transcript, srt_path)
+    create_subtitles(segments, srt_path)
     add_subtitles_to_video(video_path, srt_path, output_video_path)
     puts "Video with subtitles saved as: #{output_video_path}"
   end
