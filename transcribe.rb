@@ -42,7 +42,6 @@ def transcribe_audio_chunk(audio_path, language)
   audio_file.close
   if response.code == 200
     response_body = JSON.parse(response.body)
-    raise 'No transcript generated' if response_body['text'].empty?
     response_body
   else
     raise "Failed to transcribe audio chunk: #{response.body}"
