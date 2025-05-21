@@ -6,6 +6,7 @@ require 'tmpdir'
 require 'fileutils'
 require 'shellwords'
 require 'json'
+require 'optparse'
 
 def extract_audio(video_path, output_audio_path)
   command = "ffmpeg -i #{Shellwords.escape(video_path)} " \
@@ -126,13 +127,32 @@ def add_subtitles_to_video(video_path, srt_path, output_video_path)
 end
 
 if __FILE__ == $PROGRAM_NAME
-  unless ARGV.length >= 1
-    puts "Usage: #{$PROGRAM_NAME} <path_to_video> [language (default: en)]"
+  options = {}
+  OptionParser.new do |opts|
+    opts.banner = "Usage: #{$PROGRAM_NAME} [options]"
+
+    opts.on('-v', '--video VIDEO_PATH', 'Path to video file') do |v|
+      options[:video_path] = v
+    end
+
+    opts.on('-l', '--language LANGUAGE', 'Language code (default: en)') do |l|
+      options[:language] = l
+    end
+
+    opts.on('-h', '--help', 'Show this help message') do
+      puts opts
+      exit
+    end
+  end.parse!
+
+  video_path = options[:video_path]
+  language = options[:language] || 'en'
+
+  if video_path.nil?
+    puts "Error: Video path is required. Use --help for usage information."
     exit 1
   end
 
-  video_path = ARGV[0]
-  language = ARGV[1] || 'en'
   raise "Video file not found: #{video_path}" unless File.exist?(video_path)
 
   Dir.mktmpdir do |tmpdir|
