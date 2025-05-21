@@ -153,23 +153,24 @@ def format_timestamp(seconds)
 end
 
 def add_subtitles_to_video(video_path, srt_paths, output_video_path, target_language = nil)
-  # Base: input video and first subtitle
+  # Start building the command with the first subtitle file
   command = "ffmpeg -i #{Shellwords.escape(video_path)} -i #{Shellwords.escape(srt_paths[0])} "
-  # If there's a second subtitle
+
+  # Add second subtitle file if translating
   command += "-i #{Shellwords.escape(srt_paths[1])} " if target_language
 
-  # Add -map options for video, audio, and both subtitle tracks
-  command += "-map 0:v -map 0:a? -map 1 -map 2 " if target_language
-  command += "-map 0:v -map 0:a? -map 1 " unless target_language
-
-  # Subtitle codec
+  # Add encoding options
   command += "-c:v copy -c:a copy -c:s mov_text "
-  # Add language metadata
+
+  # Add metadata for first subtitle track
   command += "-metadata:s:s:0 language=eng "
+
+  # Add metadata for second subtitle track if translating
   command += "-metadata:s:s:1 language=#{target_language} " if target_language
 
-  # Finish
-  command += "#{Shellwords.escape(output_video_path)} -y"
+  # Add output path
+  command += Shellwords.escape(output_video_path) + " -y"
+
   puts 'Adding subtitles to the video...'
   system(command) || raise('Failed to add subtitles to the video')
 end
